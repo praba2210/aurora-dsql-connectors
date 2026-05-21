@@ -80,7 +80,7 @@ raw-options = { root = "../..", git_describe_command = ["git", "describe", "--ta
 version-file = "dsql_core/_version.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["aurora_dsql_asyncpg", "aurora_dsql_psycopg", "aurora_dsql_psycopg2", "dsql_core"]
+packages = ["aurora_dsql_asyncpg", "aurora_dsql_psycopg", "aurora_dsql_psycopg2", "dsql_core", "aurora_dsql_occ_retry"]
 
 [tool.ruff]
 line-length = 100
