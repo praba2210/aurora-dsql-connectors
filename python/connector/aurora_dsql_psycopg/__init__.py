@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dsql_core._version import __version__
-from aurora_dsql_occ_retry import OCCRetryConfig, is_occ_error
+from dsql_core.occ_retry import OCCRetryConfig, is_occ_error
 
 from .connection_class import DSQLAsyncConnection, DSQLConnection
 from .pool import AuroraDSQLAsyncPool, AuroraDSQLPool, create_async_pool, create_pool

@@ -3,23 +3,22 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, TypeVar
+import logging
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
 
 import asyncpg
-
-from aurora_dsql_occ_retry import OCCRetryConfig
+from dsql_core.occ_retry import OCCRetryConfig, _retry_async, resolve_retry_config
 
 from .connector import connect as dsql_connect
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
 
 class AuroraDSQLPool(asyncpg.Pool):
-    """Aurora DSQL connection pool with OCC retry support.
-
-    Subclasses asyncpg.Pool so isinstance checks, typing, and all
-    upstream methods continue to work unchanged.
-    """
+    """Aurora DSQL connection pool with OCC retry support."""
 
     __slots__ = ("_retry",)
 
@@ -33,20 +32,29 @@ class AuroraDSQLPool(asyncpg.Pool):
         *,
         retry: OCCRetryConfig | bool | None = None,
     ) -> T:
-        """Execute callback in a transaction with OCC retry.
+        """Execute callback in a transaction with optional OCC retry."""
+        config = resolve_retry_config(self._retry, retry)
 
-        Uses explicit BEGIN/COMMIT/ROLLBACK (asyncpg autocommits by default).
+        async def execute() -> T:
+            conn = await self.acquire()
+            try:
+                await conn.execute("BEGIN")
+                try:
+                    result = await callback(conn)
+                    await conn.execute("COMMIT")
+                    return result
+                except BaseException:
+                    try:
+                        await conn.execute("ROLLBACK")
+                    except Exception as e:
+                        logger.debug("Rollback failed: %s", e)
+                    raise
+            finally:
+                await self.release(conn)
 
-        Args:
-            callback: Async callable receiving an asyncpg Connection.
-            retry: Per-call override. None inherits pool config; True enables
-                   with pool/default config; False disables;
-                   OCCRetryConfig replaces pool config entirely.
-
-        Returns:
-            The return value of the callback.
-        """
-        raise NotImplementedError
+        if config is None:
+            return await execute()
+        return await _retry_async(execute, config)
 
 
 async def create_pool(

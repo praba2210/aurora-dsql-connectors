@@ -1,28 +1,26 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""OCC retry-aware pool classes for psycopg."""
-
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, TypeVar
+import logging
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
 
 from psycopg import AsyncConnection, Connection
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
-from aurora_dsql_occ_retry import OCCRetryConfig
+from dsql_core.occ_retry import OCCRetryConfig, _retry_async, _retry_sync, resolve_retry_config
 
 from .connection_class import DSQLAsyncConnection, DSQLConnection
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
 
 class AuroraDSQLPool(ConnectionPool):
-    """Aurora DSQL connection pool with OCC retry support.
-
-    Subclasses psycopg_pool.ConnectionPool so isinstance checks, typing,
-    and all upstream methods continue to work unchanged.
-    """
+    """Aurora DSQL connection pool with OCC retry support."""
 
     def __init__(self, *args, retry: OCCRetryConfig | bool | None = None, **kwargs):
         self._retry = retry
@@ -34,28 +32,29 @@ class AuroraDSQLPool(ConnectionPool):
         *,
         retry: OCCRetryConfig | bool | None = None,
     ) -> T:
-        """Execute callback in a transaction with OCC retry.
+        """Execute callback in a transaction with optional OCC retry."""
+        config = resolve_retry_config(self._retry, retry)
 
-        Uses implicit transactions (psycopg autocommit=False default).
+        def execute() -> T:
+            with self.connection() as conn:
+                try:
+                    result = callback(conn)
+                    conn.commit()
+                    return result
+                except BaseException:
+                    try:
+                        conn.rollback()
+                    except Exception as e:
+                        logger.debug("Rollback failed: %s", e)
+                    raise
 
-        Args:
-            callback: Callable receiving a psycopg Connection.
-            retry: Per-call override. None inherits pool config; True enables
-                   with pool/default config; False disables;
-                   OCCRetryConfig replaces pool config entirely.
-
-        Returns:
-            The return value of the callback.
-        """
-        raise NotImplementedError
+        if config is None:
+            return execute()
+        return _retry_sync(execute, config)
 
 
 class AuroraDSQLAsyncPool(AsyncConnectionPool):
-    """Aurora DSQL async connection pool with OCC retry support.
-
-    Subclasses psycopg_pool.AsyncConnectionPool so isinstance checks, typing,
-    and all upstream methods continue to work unchanged.
-    """
+    """Aurora DSQL async connection pool with OCC retry support."""
 
     def __init__(self, *args, retry: OCCRetryConfig | bool | None = None, **kwargs):
         self._retry = retry
@@ -67,20 +66,25 @@ class AuroraDSQLAsyncPool(AsyncConnectionPool):
         *,
         retry: OCCRetryConfig | bool | None = None,
     ) -> T:
-        """Execute callback in a transaction with OCC retry.
+        """Execute callback in a transaction with optional OCC retry."""
+        config = resolve_retry_config(self._retry, retry)
 
-        Uses implicit transactions (psycopg autocommit=False default).
+        async def execute() -> T:
+            async with self.connection() as conn:
+                try:
+                    result = await callback(conn)
+                    await conn.commit()
+                    return result
+                except BaseException:
+                    try:
+                        await conn.rollback()
+                    except Exception as e:
+                        logger.debug("Rollback failed: %s", e)
+                    raise
 
-        Args:
-            callback: Async callable receiving a psycopg AsyncConnection.
-            retry: Per-call override. None inherits pool config; True enables
-                   with pool/default config; False disables;
-                   OCCRetryConfig replaces pool config entirely.
-
-        Returns:
-            The return value of the callback.
-        """
-        raise NotImplementedError
+        if config is None:
+            return await execute()
+        return await _retry_async(execute, config)
 
 
 def create_pool(
@@ -91,12 +95,15 @@ def create_pool(
 ) -> AuroraDSQLPool:
     """Create Aurora DSQL connection pool with IAM authentication.
 
-    Args:
-        conninfo: Connection string or DSQL hostname.
-        retry: Pool-level retry config. None disables; True enables defaults.
-        **kwargs: Passed to psycopg_pool.ConnectionPool.
+    Pool is returned unopened; use ``with pool:`` or call ``pool.open()``.
     """
-    kwargs.setdefault("connection_class", DSQLConnection)
+    if "connection_class" in kwargs:
+        if not issubclass(kwargs["connection_class"], DSQLConnection):
+            raise TypeError(
+                "connection_class must be a subclass of DSQLConnection for IAM auth"
+            )
+    else:
+        kwargs["connection_class"] = DSQLConnection
     return AuroraDSQLPool(conninfo, retry=retry, **kwargs)
 
 
@@ -108,10 +115,13 @@ def create_async_pool(
 ) -> AuroraDSQLAsyncPool:
     """Create Aurora DSQL async connection pool with IAM authentication.
 
-    Args:
-        conninfo: Connection string or DSQL hostname.
-        retry: Pool-level retry config. None disables; True enables defaults.
-        **kwargs: Passed to psycopg_pool.AsyncConnectionPool.
+    Pool is returned unopened; use ``async with pool:`` or call ``await pool.open()``.
     """
-    kwargs.setdefault("connection_class", DSQLAsyncConnection)
+    if "connection_class" in kwargs:
+        if not issubclass(kwargs["connection_class"], DSQLAsyncConnection):
+            raise TypeError(
+                "connection_class must be a subclass of DSQLAsyncConnection for IAM auth"
+            )
+    else:
+        kwargs["connection_class"] = DSQLAsyncConnection
     return AuroraDSQLAsyncPool(conninfo, retry=retry, **kwargs)
