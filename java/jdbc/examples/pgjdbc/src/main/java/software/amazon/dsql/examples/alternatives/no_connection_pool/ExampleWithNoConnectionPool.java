@@ -13,6 +13,9 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Properties;
 
+import software.amazon.dsql.jdbc.OCCRetry;
+import software.amazon.dsql.jdbc.OCCRetryConfig;
+
 public class ExampleWithNoConnectionPool {
 
     // Get a connection to Aurora DSQL.
@@ -41,22 +44,32 @@ public class ExampleWithNoConnectionPool {
                 setSchema.execute("SET search_path=myschema");
                 setSchema.close();
             }
+
+            // Use OCC retry with existing connection for write operations
+            OCCRetryConfig retryConfig = OCCRetryConfig.defaults();
+
             // Create a new table named owner
-            Statement create = conn.createStatement();
-            create.executeUpdate("""
-                    CREATE TABLE IF NOT EXISTS owner(
-                    id uuid NOT NULL DEFAULT gen_random_uuid(),
-                    name varchar(30) NOT NULL,
-                    city varchar(80) NOT NULL,
-                    telephone varchar(20) DEFAULT NULL,
-                    PRIMARY KEY (id))""");
-            create.close();
+            OCCRetry.execute(conn, retryConfig, c -> {
+                Statement create = c.createStatement();
+                create.executeUpdate("""
+                        CREATE TABLE IF NOT EXISTS owner(
+                        id uuid NOT NULL DEFAULT gen_random_uuid(),
+                        name varchar(30) NOT NULL,
+                        city varchar(80) NOT NULL,
+                        telephone varchar(20) DEFAULT NULL,
+                        PRIMARY KEY (id))""");
+                create.close();
+                return null;
+            });
 
             // Insert some data
-            Statement insert = conn.createStatement();
-            insert.executeUpdate(
-                    "INSERT INTO owner (name, city, telephone) VALUES ('John Doe', 'Anytown', '555-555-1999')");
-            insert.close();
+            OCCRetry.execute(conn, retryConfig, c -> {
+                Statement insert = c.createStatement();
+                insert.executeUpdate(
+                        "INSERT INTO owner (name, city, telephone) VALUES ('John Doe', 'Anytown', '555-555-1999')");
+                insert.close();
+                return null;
+            });
 
             // Read back the data and assert they are present
             String selectSQL = "SELECT * FROM owner";
@@ -70,10 +83,12 @@ public class ExampleWithNoConnectionPool {
             }
 
             // Delete some data
-            String deleteSql = String.format("DELETE FROM owner where name='John Doe'");
-            Statement delete = conn.createStatement();
-            delete.executeUpdate(deleteSql);
-            delete.close();
+            OCCRetry.execute(conn, retryConfig, c -> {
+                Statement delete = c.createStatement();
+                delete.executeUpdate("DELETE FROM owner where name='John Doe'");
+                delete.close();
+                return null;
+            });
         }
         System.out.println("Connection exercised successfully");
     }
