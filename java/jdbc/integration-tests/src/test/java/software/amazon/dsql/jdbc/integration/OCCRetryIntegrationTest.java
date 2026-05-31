@@ -258,7 +258,8 @@ public class OCCRetryIntegrationTest {
         }
 
         int numThreads = 3;
-        CountDownLatch startLatch = new CountDownLatch(1);
+        CountDownLatch allHaveRead = new CountDownLatch(numThreads);
+        AtomicInteger totalAttempts = new AtomicInteger(0);
         AtomicReference<Exception> firstError = new AtomicReference<>();
         Thread[] threads = new Thread[numThreads];
 
@@ -267,12 +268,14 @@ public class OCCRetryIntegrationTest {
                     new Thread(
                             () -> {
                                 try {
-                                    startLatch.await(10, TimeUnit.SECONDS);
+                                    AtomicInteger localAttempts = new AtomicInteger(0);
                                     try (Connection conn = createConnection()) {
                                         OCCRetry.execute(
                                                 conn,
                                                 config,
                                                 c -> {
+                                                    int attempt = localAttempts.incrementAndGet();
+                                                    totalAttempts.incrementAndGet();
                                                     int current;
                                                     try (Statement stmt = c.createStatement();
                                                             ResultSet rs =
@@ -283,6 +286,24 @@ public class OCCRetryIntegrationTest {
                                                         assertTrue(rs.next());
                                                         current = rs.getInt("value");
                                                     }
+
+                                                    // On first attempt, wait for all threads to
+                                                    // read before writing — forces overlapping
+                                                    // snapshots and guarantees OCC on commit
+                                                    if (attempt == 1) {
+                                                        allHaveRead.countDown();
+                                                        try {
+                                                            assertTrue(
+                                                                    allHaveRead.await(
+                                                                            10, TimeUnit.SECONDS),
+                                                                    "All threads should have read");
+                                                        } catch (InterruptedException ie) {
+                                                            Thread.currentThread().interrupt();
+                                                            throw new SQLException(
+                                                                    "interrupted", ie);
+                                                        }
+                                                    }
+
                                                     try (Statement stmt = c.createStatement()) {
                                                         stmt.executeUpdate(
                                                                 "UPDATE "
@@ -301,7 +322,6 @@ public class OCCRetryIntegrationTest {
             threads[i].start();
         }
 
-        startLatch.countDown();
         for (Thread t : threads) {
             t.join(30_000);
         }
@@ -310,7 +330,13 @@ public class OCCRetryIntegrationTest {
             throw firstError.get();
         }
 
-        // All increments should have applied
+        assertTrue(
+                totalAttempts.get() > numThreads,
+                "Expected OCC retries but total attempts ("
+                        + totalAttempts.get()
+                        + ") equals thread count — no contention occurred");
+
+        // All increments should have applied despite conflicts
         try (Connection conn = createConnection();
                 Statement stmt = conn.createStatement();
                 ResultSet rs =
