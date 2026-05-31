@@ -22,7 +22,7 @@ package software.amazon.dsql.jdbc;
  * <p>Use {@link #defaults()} for standard settings or {@link #builder()} for custom configuration.
  *
  * <pre>{@code
- * // Use defaults (maxRetries=3, baseDelayMs=100, maxDelayMs=5000, multiplier=2.0, jitterFactor=0.25)
+ * // Use defaults (see DEFAULT_* constants)
  * OCCRetryConfig config = OCCRetryConfig.defaults();
  *
  * // Custom configuration
@@ -164,10 +164,10 @@ public final class OCCRetryConfig {
                                 + " baseDelayMs="
                                 + baseDelayMs);
             }
-            if (multiplier < 1.0) {
+            if (!Double.isFinite(multiplier) || multiplier < 1.0) {
                 throw new IllegalArgumentException("multiplier must be >= 1.0, got: " + multiplier);
             }
-            if (jitterFactor < 0.0 || jitterFactor > 1.0) {
+            if (!Double.isFinite(jitterFactor) || jitterFactor < 0.0 || jitterFactor > 1.0) {
                 throw new IllegalArgumentException(
                         "jitterFactor must be between 0.0 and 1.0, got: " + jitterFactor);
             }

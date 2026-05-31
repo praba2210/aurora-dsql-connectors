@@ -122,4 +122,25 @@ class OCCRetryConfigTest {
         OCCRetryConfig one = OCCRetryConfig.builder().jitterFactor(1.0).build();
         assertEquals(1.0, one.getJitterFactor());
     }
+
+    @Test
+    void builder_multiplierNaN_throws() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> OCCRetryConfig.builder().multiplier(Double.NaN).build());
+    }
+
+    @Test
+    void builder_multiplierInfinity_throws() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> OCCRetryConfig.builder().multiplier(Double.POSITIVE_INFINITY).build());
+    }
+
+    @Test
+    void builder_jitterFactorNaN_throws() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> OCCRetryConfig.builder().jitterFactor(Double.NaN).build());
+    }
 }

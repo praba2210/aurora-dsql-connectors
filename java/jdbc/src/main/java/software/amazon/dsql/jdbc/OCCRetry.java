@@ -18,6 +18,8 @@ package software.amazon.dsql.jdbc;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.Objects;
+import java.util.concurrent.ThreadLocalRandom;
 import javax.sql.DataSource;
 
 /**
@@ -101,7 +103,28 @@ public final class OCCRetry {
     public static <T> T execute(
             DataSource dataSource, OCCRetryConfig config, TransactionCallback<T> callback)
             throws SQLException {
-        throw new UnsupportedOperationException("Not yet implemented");
+        Objects.requireNonNull(dataSource, "dataSource must not be null");
+        Objects.requireNonNull(config, "config must not be null");
+        Objects.requireNonNull(callback, "callback must not be null");
+
+        SQLException lastError = null;
+        for (int attempt = 0; attempt <= config.getMaxRetries(); attempt++) {
+            try (Connection conn = dataSource.getConnection()) {
+                conn.setAutoCommit(false);
+                T result = callback.execute(conn);
+                conn.commit();
+                return result;
+            } catch (SQLException e) {
+                if (!isOCCError(e)) {
+                    throw e;
+                }
+                lastError = e;
+                if (attempt < config.getMaxRetries()) {
+                    sleep(calculateBackoff(config, attempt));
+                }
+            }
+        }
+        throw lastError;
     }
 
     /**
@@ -120,15 +143,61 @@ public final class OCCRetry {
     public static <T> T execute(
             Connection connection, OCCRetryConfig config, TransactionCallback<T> callback)
             throws SQLException {
-        throw new UnsupportedOperationException("Not yet implemented");
+        Objects.requireNonNull(connection, "connection must not be null");
+        Objects.requireNonNull(config, "config must not be null");
+        Objects.requireNonNull(callback, "callback must not be null");
+
+        connection.setAutoCommit(false);
+        SQLException lastError = null;
+        for (int attempt = 0; attempt <= config.getMaxRetries(); attempt++) {
+            try {
+                T result = callback.execute(connection);
+                connection.commit();
+                return result;
+            } catch (SQLException e) {
+                try {
+                    connection.rollback();
+                } catch (SQLException rollbackEx) {
+                    e.addSuppressed(rollbackEx);
+                }
+                if (!isOCCError(e)) {
+                    throw e;
+                }
+                lastError = e;
+                if (attempt < config.getMaxRetries()) {
+                    sleep(calculateBackoff(config, attempt));
+                }
+            }
+        }
+        throw lastError;
+    }
+
+    static long calculateBackoff(OCCRetryConfig config, int attempt) {
+        int exponent = Math.min(attempt, 31);
+        double delay =
+                Math.min(
+                        config.getBaseDelayMs() * Math.pow(config.getMultiplier(), exponent),
+                        config.getMaxDelayMs());
+        double jitter = delay * ThreadLocalRandom.current().nextDouble() * config.getJitterFactor();
+        return (long) (delay + jitter);
+    }
+
+    private static void sleep(long millis) throws SQLException {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new SQLException("Retry interrupted", ie);
+        }
     }
 
     /**
      * Checks if a SQLException is an OCC conflict error.
      *
      * <p>Returns true for SQLState OC000 (mutation conflict), OC001 (schema conflict), or 40001
-     * (serialization failure). Also inspects the exception message for OC000/OC001 codes, as some
-     * JDBC drivers surface these in the message rather than the SQLState.
+     * (serialization failure). SQLState 40001 is matched unconditionally because Aurora DSQL surfaces
+     * OCC conflicts with this code. Also inspects the exception message for OC000/OC001 codes, as
+     * pgJDBC may surface these in the message text with 40001 as the envelope SQLState.
      *
      * @param e the exception to check
      * @return true if the error is an OCC conflict
@@ -141,13 +210,11 @@ public final class OCCRetry {
         if (OCC_CODE_MUTATION.equals(sqlState) || OCC_CODE_SCHEMA.equals(sqlState)) {
             return true;
         }
-        if (OCC_CODE_SERIALIZATION.equals(sqlState)) {
+        String message = e.getMessage();
+        if (message != null
+                && (message.contains(OCC_CODE_MUTATION) || message.contains(OCC_CODE_SCHEMA))) {
             return true;
         }
-        String message = e.getMessage();
-        if (message != null) {
-            return message.contains(OCC_CODE_MUTATION) || message.contains(OCC_CODE_SCHEMA);
-        }
-        return false;
+        return OCC_CODE_SERIALIZATION.equals(sqlState);
     }
 }
