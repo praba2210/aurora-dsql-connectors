@@ -285,7 +285,102 @@ class OCCRetryTest {
         verify(conn, times(2)).rollback();
     }
 
-    // --- calculateBackoff tests ---
+    // --- commit-throwing-OCC tests ---
+
+    @Test
+    void executeDataSource_commitThrowsOCC_retries() throws SQLException {
+        DataSource ds = mock(DataSource.class);
+        Connection conn1 = mock(Connection.class);
+        Connection conn2 = mock(Connection.class);
+        when(ds.getConnection()).thenReturn(conn1, conn2);
+        org.mockito.Mockito.doThrow(new SQLException("conflict", "OC000")).when(conn1).commit();
+
+        OCCRetryConfig config =
+                OCCRetryConfig.builder().maxRetries(3).baseDelayMs(1).maxDelayMs(10).build();
+
+        String result = OCCRetry.execute(ds, config, c -> "done");
+
+        assertEquals("done", result);
+        verify(conn1).commit();
+        verify(conn2).commit();
+    }
+
+    @Test
+    void executeConnection_commitThrowsOCC_retries() throws SQLException {
+        Connection conn = mock(Connection.class);
+        AtomicInteger attempts = new AtomicInteger();
+        org.mockito.Mockito.doAnswer(
+                        invocation -> {
+                            if (attempts.get() == 1) {
+                                throw new SQLException("conflict", "40001");
+                            }
+                            return null;
+                        })
+                .when(conn)
+                .commit();
+
+        OCCRetryConfig config =
+                OCCRetryConfig.builder().maxRetries(3).baseDelayMs(1).maxDelayMs(10).build();
+
+        String result =
+                OCCRetry.execute(
+                        conn,
+                        config,
+                        c -> {
+                            attempts.incrementAndGet();
+                            return "ok";
+                        });
+
+        assertEquals("ok", result);
+        assertEquals(2, attempts.get());
+        verify(conn).rollback();
+        verify(conn, times(2)).commit();
+    }
+
+    // --- InterruptedException test ---
+
+    @Test
+    void executeConnection_interruptedDuringSleep_throwsSQLException() throws SQLException {
+        Connection conn = mock(Connection.class);
+        OCCRetryConfig config =
+                OCCRetryConfig.builder().maxRetries(3).baseDelayMs(50).maxDelayMs(200).build();
+
+        Thread.currentThread().interrupt();
+
+        SQLException thrown =
+                assertThrows(
+                        SQLException.class,
+                        () ->
+                                OCCRetry.execute(
+                                        conn,
+                                        config,
+                                        c -> {
+                                            throw new SQLException("conflict", "OC000");
+                                        }));
+
+        assertTrue(thrown.getMessage().contains("interrupted"));
+        assertTrue(Thread.interrupted());
+    }
+
+    // --- DataSource.getConnection() failure test ---
+
+    @Test
+    void executeDataSource_getConnectionThrows_propagatesImmediately() throws SQLException {
+        DataSource ds = mock(DataSource.class);
+        SQLException poolExhausted = new SQLException("pool exhausted", "08001");
+        when(ds.getConnection()).thenThrow(poolExhausted);
+
+        OCCRetryConfig config =
+                OCCRetryConfig.builder().maxRetries(3).baseDelayMs(1).maxDelayMs(10).build();
+
+        SQLException thrown =
+                assertThrows(
+                        SQLException.class, () -> OCCRetry.execute(ds, config, c -> "never"));
+
+        assertEquals(poolExhausted, thrown);
+    }
+
+    // --- rollback failure tests ---
 
     @Test
     void executeConnection_rollbackFailure_suppressedOnOriginalException() throws SQLException {

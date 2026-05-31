@@ -195,8 +195,8 @@ public final class OCCRetry {
      * Checks if a SQLException is an OCC conflict error.
      *
      * <p>Returns true for SQLState OC000 (mutation conflict), OC001 (schema conflict), or 40001
-     * (serialization failure). SQLState 40001 is matched unconditionally because Aurora DSQL uses it
-     * exclusively for OCC conflicts. Also inspects the exception message for OC000/OC001 codes, as
+     * (serialization failure). SQLState 40001 is matched unconditionally because Aurora DSQL surfaces
+     * OCC conflicts with this code. Also inspects the exception message for OC000/OC001 codes, as
      * pgJDBC may surface these in the message text with 40001 as the envelope SQLState.
      *
      * @param e the exception to check

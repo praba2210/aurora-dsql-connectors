@@ -22,7 +22,7 @@ package software.amazon.dsql.jdbc;
  * <p>Use {@link #defaults()} for standard settings or {@link #builder()} for custom configuration.
  *
  * <pre>{@code
- * // Use defaults (maxRetries=3, baseDelayMs=100, maxDelayMs=5000, multiplier=2.0, jitterFactor=0.25)
+ * // Use defaults (see DEFAULT_* constants)
  * OCCRetryConfig config = OCCRetryConfig.defaults();
  *
  * // Custom configuration
